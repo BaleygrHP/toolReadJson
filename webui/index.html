@@ -1566,9 +1566,13 @@
       };
     }
 
+    // Giữ tối đa số dòng log trong bộ nhớ/DOM để tránh chậm dần khi log rất dài.
+    const MAX_LOG_LINES = 5000;
+
     const state = {
       activeJobId: null,
       logOffset: 0,
+      logLines: [],
       pollHandle: null,
       page: 1,
       pageSize: 100,
@@ -1894,7 +1898,7 @@
         resetResultCaches();
         clearUtilityLookup();
         document.getElementById("active-job-id").textContent = state.activeJobId;
-        document.getElementById("logs").textContent = "";
+        clearLogs();
         setStatusPill(output.status || "queued");
         setBox("run-msg", `Đã đưa job vào hàng chờ: ${state.activeJobId}`, "ok");
         activateTab("progress");
@@ -1902,6 +1906,29 @@
       } catch (error) {
         setBox("run-msg", `Tạo job thất bại: ${error.message}`, "error");
       }
+    }
+
+    function clearLogs() {
+      state.logLines = [];
+      document.getElementById("logs").textContent = "";
+    }
+
+    // Thêm log hiệu quả: không đọc lại toàn bộ nội dung mỗi lần (tránh chậm khi log dài),
+    // giới hạn số dòng, và chỉ tự cuộn xuống khi người dùng đang bám đáy (để còn cuộn lên đọc).
+    function appendLogLines(lines) {
+      if (!lines || !lines.length) return;
+      const box = document.getElementById("logs");
+      const stickToBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 48;
+
+      state.logLines.push(...lines);
+      if (state.logLines.length > MAX_LOG_LINES) {
+        state.logLines = state.logLines.slice(-MAX_LOG_LINES);
+        box.textContent = state.logLines.join("\n");
+      } else {
+        box.append(`${box.textContent ? "\n" : ""}${lines.join("\n")}`);
+      }
+
+      if (stickToBottom) box.scrollTop = box.scrollHeight;
     }
 
     async function refreshJobStatus() {
@@ -1915,9 +1942,7 @@
 
       const logs = await api(`/api/v1/jobs/${state.activeJobId}/logs?offset=${state.logOffset}`);
       if (Array.isArray(logs.logs) && logs.logs.length) {
-        const box = document.getElementById("logs");
-        box.textContent += `${box.textContent ? "\n" : ""}${logs.logs.join("\n")}`;
-        box.scrollTop = box.scrollHeight;
+        appendLogLines(logs.logs);
       }
       state.logOffset = logs.next_offset || state.logOffset;
 
@@ -2789,7 +2814,7 @@
       resetResultCaches();
       clearUtilityLookup();
       document.getElementById("active-job-id").textContent = jobId;
-      document.getElementById("logs").textContent = "";
+      clearLogs();
       await pollJob();
       activateTab("results");
     }

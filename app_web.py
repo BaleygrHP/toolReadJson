@@ -100,6 +100,8 @@ class JobState:
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
     logs: List[str] = field(default_factory=list)
+    # Số dòng log đã bị cắt khỏi đầu buffer (để offset của client là chỉ số tuyệt đối, không lệch khi trim).
+    logs_dropped: int = 0
     progress: Dict = field(
         default_factory=lambda: {
             "tasks_done": 0,
@@ -493,7 +495,9 @@ class JobManager:
                 return
             job.logs.append(line)
             if len(job.logs) > MAX_LOGS_IN_MEMORY:
+                overflow = len(job.logs) - MAX_LOGS_IN_MEMORY
                 job.logs = job.logs[-MAX_LOGS_IN_MEMORY:]
+                job.logs_dropped += overflow
             self._update_progress_from_log(job, msg)
             self._store.upsert_job(job)
         self._store.append_log(job_id, line, time.time())
@@ -2400,8 +2404,14 @@ def get_job_logs(job_id: str, offset: int = Query(0, ge=0)):
     job = manager.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="job not found")
-    lines = job.logs[offset:]
-    return {"logs": lines, "next_offset": offset + len(lines)}
+    # offset là chỉ số tuyệt đối. Quy về vị trí trong buffer hiện tại; nếu client tụt quá xa
+    # (các dòng nó chưa đọc đã bị trim mất) thì bắt đầu từ đầu buffer để log vẫn chảy tiếp.
+    dropped = getattr(job, "logs_dropped", 0)
+    start = offset - dropped
+    if start < 0:
+        start = 0
+    lines = job.logs[start:]
+    return {"logs": lines, "next_offset": dropped + len(job.logs)}
 
 
 @app.get("/api/v1/jobs/{job_id}/sheets")
